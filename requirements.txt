@@ -1,0 +1,3 @@
+fastapi
+uvicorn
+pyinstaller==5.13.2
