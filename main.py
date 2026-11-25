@@ -61,9 +61,10 @@ CREATE TABLE IF NOT EXISTS attendance (
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
+    national_id TEXT UNIQUE,
     password_hash TEXT NOT NULL,
     full_name TEXT NOT NULL DEFAULT '',
-    role TEXT NOT NULL CHECK (role IN ('admin','teacher')),
+    role TEXT NOT NULL CHECK (role IN ('admin','teacher','student','parent')),
     teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
     active INTEGER NOT NULL DEFAULT 1
 );
@@ -237,8 +238,8 @@ ADMIN = Depends(require_roles("admin"))             # فقط مدیر
 
 
 class LoginIn(BaseModel):
-    username: str
-    password: str
+    national_id: str = Field(min_length=1, max_length=20)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class PasswordChangeIn(BaseModel):
@@ -248,15 +249,16 @@ class PasswordChangeIn(BaseModel):
 
 class UserIn(BaseModel):
     username: str = Field(min_length=3)
+    national_id: str = Field(min_length=5, max_length=20)
     password: str = Field(min_length=8)
     full_name: str = ""
-    role: Literal["admin", "teacher"]
+    role: Literal["admin", "teacher", "student", "parent"]
     teacher_code: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
     full_name: str = ""
-    role: Literal["admin", "teacher"]
+    role: Literal["admin", "teacher", "student", "parent"]
     active: bool = True
     teacher_code: Optional[str] = None
 
@@ -267,7 +269,7 @@ class PasswordResetIn(BaseModel):
 
 @app.post("/auth/login")
 def login(body: LoginIn):
-    key = body.username.strip().lower()
+    key = body.national_id.strip()
     now = time.time()
 
     count, locked_until = FAILED_LOGINS.get(key, (0, 0))
@@ -279,7 +281,7 @@ def login(body: LoginIn):
 
     with db() as conn:
         user = conn.execute(
-            "SELECT * FROM users WHERE username = ?", (key,)).fetchone()
+            "SELECT * FROM users WHERE national_id = ?", (key,)).fetchone()
         ok = (user is not None and user["active"]
               and verify_password(body.password, user["password_hash"]))
 
@@ -298,7 +300,7 @@ def login(body: LoginIn):
 
     return {"token": token, "role": user["role"],
             "full_name": user["full_name"] or user["username"],
-            "username": user["username"]}
+            "national_id": user["national_id"]}
 
 
 @app.post("/auth/logout")
@@ -360,7 +362,7 @@ def check_last_admin(conn, user_id: int):
 def list_users(user: dict = ADMIN):
     with db() as conn:
         return {"users": rows(conn.execute("""
-            SELECT u.id, u.username, u.full_name, u.role, u.active,
+            SELECT u.id, u.username, u.national_id, u.full_name, u.role, u.active,
                    t.teacher_code,
                    t.first_name || ' ' || t.last_name AS teacher_name
             FROM users u LEFT JOIN teachers t ON t.id = u.teacher_id
@@ -371,10 +373,10 @@ def list_users(user: dict = ADMIN):
 def create_user(u: UserIn, user: dict = ADMIN):
     with db() as conn:
         conn.execute(
-            "INSERT INTO users (username, password_hash, full_name, role,"
-            " teacher_id) VALUES (?, ?, ?, ?, ?)",
-            (u.username.strip().lower(), hash_password(u.password),
-             normalize_name(u.full_name), u.role,
+            "INSERT INTO users (username, national_id, password_hash, full_name, role,"
+            " teacher_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (u.username.strip().lower(), u.national_id.strip(),
+             hash_password(u.password), normalize_name(u.full_name), u.role,
              teacher_id_from_code(conn, u.teacher_code)))
     return {"message": "کاربر ساخته شد"}
 
@@ -443,8 +445,8 @@ def ensure_first_admin():
         chosen = os.environ.pop("SCHOOL_ADMIN_PASSWORD", None)
         password = chosen or secrets.token_urlsafe(9)
         conn.execute(
-            "INSERT INTO users (username, password_hash, full_name, role)"
-            " VALUES ('admin', ?, 'مدیر سیستم', 'admin')",
+            "INSERT INTO users (username, national_id, password_hash, full_name, role)"
+            " VALUES ('admin', 'ADMIN-SETUP', ?, 'مدیر سیستم', 'admin')",
             (hash_password(password),))
     if not chosen:
         print("=" * 56)
@@ -467,8 +469,8 @@ def set_admin_password(new_password: str):
             " WHERE username = 'admin'", (hash_password(new_password),))
         if cur.rowcount == 0:
             conn.execute(
-                "INSERT INTO users (username, password_hash, full_name, role)"
-                " VALUES ('admin', ?, 'مدیر سیستم', 'admin')",
+                "INSERT INTO users (username, national_id, password_hash, full_name, role)"
+                " VALUES ('admin', 'ADMIN-SETUP', ?, 'مدیر سیستم', 'admin')",
                 (hash_password(new_password),))
 
 
